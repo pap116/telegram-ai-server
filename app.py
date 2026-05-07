@@ -4,14 +4,22 @@ import re
 from datetime import datetime
 from flask import Flask, request, jsonify
 
+# Εισαγωγή συναρτήσεων βάσης
+from analytics_db import init_db, save_analysis, get_latest_analysis, get_recent_events, get_client_stats, get_all_clients_stats, cleanup_old_analyses, save_reminder, get_reminder_count
+
 app = Flask(__name__)
 
+# Environment variables
 DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY', '')
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
-TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')  # Το δικό σου chat ID (admin)
+TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
 WP_API_TOKEN = os.environ.get('WP_API_TOKEN', '')
 
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
+
+# Αρχικοποίηση βάσης και εκκαθάριση παλαιών εγγραφών
+init_db()
+cleanup_old_analyses(months=6)
 
 def get_ip_location(ip):
     if not ip or ip.startswith('127.') or ip == '::1':
@@ -45,6 +53,7 @@ def webhook():
     ip_changed = data.get('ip_changed', False)
     first_open_time_str = data.get('first_open_time', '')
 
+    # Υπολογισμός ωρών από το πρώτο άνοιγμα (για reminder delay)
     hours_since_first_open = 0
     if first_open_time_str:
         try:
@@ -54,6 +63,7 @@ def webhook():
         except:
             pass
 
+    # Prompt ανάλυσης (6 γραμμές)
     prompt = f"""Είσαι σύμβουλος πωλήσεων διακόσμησης. Ανάλυσε συμπεριφορά πελάτη. Στοιχεία:
 
 - Ανοίγματα email: {opens} φορές
@@ -62,9 +72,9 @@ def webhook():
 - IP: {ip} (περιοχή: {location})
 - Η IP άλλαξε: {"ΝΑΙ (κινητικότητα)" if ip_changed else "ΟΧΙ (σταθερή)"}
 
-Απάντησε ΜΟΝΟ με 6 γραμμές:
+Απάντησε ΜΟΝΟ με 6 γραμμές, ακριβώς όπως φαίνονται παρακάτω.
 
-1. Πιθανότητα κλεισίματος (1-10): [X/10] - (σύντομη εξήγηση)
+1. Πιθανότητα κλεισίματος (1-10): [X/10] - (μία σύντομη εξήγηση)
 2. Συναισθηματική κατάσταση: (π.χ. "προσεκτικός", "ενθουσιώδης")
 3. Πρόταση επόμενης επαφής: (π.χ. "τηλέφωνο αύριο 10-12", "email με έκπτωση")
 4. Ιδανικό μήνυμα που θα του στείλεις (αυτούσιο, σε ευθεία ομιλία, μέχρι 15 λέξεις)
@@ -87,17 +97,30 @@ def webhook():
     except Exception as e:
         advice = f"AI error: {str(e)}"
 
+    # Εξαγωγή βαθμολογίας
     try:
         score_match = re.search(r'\(1-10\):\s*(\d+)/10', advice)
         score = int(score_match.group(1)) if score_match else 0
     except:
         score = 0
 
-    # Στέλνουμε την ανάλυση ΜΟΝΟ σε εσένα (admin)
+    # Αποθήκευση ανάλυσης στη βάση
+    save_analysis(
+        email=data.get('email'),
+        name=data.get('name'),
+        package=data.get('package'),
+        size=data.get('size'),
+        open_count=opens,
+        ip_changed=1 if ip_changed else 0,
+        analysis_text=advice,
+        score=score
+    )
+
+    # Αποστολή ανάλυσης στον admin (Telegram)
     telegram_msg = f"🎯 *Ανάλυση Πώλησης*\n\n{advice}"
     send_telegram_message(TELEGRAM_CHAT_ID, telegram_msg)
 
-    # Reminder (μόνο αν score>6 και >24 ώρες)
+    # Απόφαση αποστολής reminder (score>6 και μετά από 24 ώρες)
     if score > 6 and hours_since_first_open >= 24:
         wp_endpoint = "https://10deco.gr/wp-json/deco/v1/send-reminder"
         reminder_data = {
@@ -133,17 +156,47 @@ def telegram_webhook():
     if not text:
         return jsonify({"status": "ok"}), 200
 
-    # Αν ο χρήστης ΔΕΝ είναι ο admin, αγνόησέ τον σιωπηρά (χωρίς μήνυμα)
+    # Μόνο ο admin (εσύ) μπορεί να συνομιλεί
     if str(chat_id) != str(TELEGRAM_CHAT_ID):
         return jsonify({"status": "ok"}), 200
 
-    # Νέο, αυστηρό prompt
-    prompt = f"""Είσαι ο βοηθός του Παντελή, ιδιοκτήτη της 10deco (interior design). Ο Παντελής σε ρωτάει κάτι. Εσύ:
+    # Δημιουργία context από τη βάση
+    context_lines = []
 
-- Απευθύνεσαι σε αυτόν με το μικρό του όνομα "Παντελή" (π.χ. "Παντελή, ..." ή "... Παντελή").
-- ΔΕΝ επινοείς στοιχεία που δεν γνωρίζεις (π.χ. καμπάνιες, ονόματα πελατών, ραντεβού). Αν δεν ξέρεις, λες "Δεν έχω αυτή την πληροφορία" ή "Αυτό δεν το γνωρίζω".
-- Δίνεις συμβουλές μόνο για πωλήσεις, διακόσμηση, ή διαχείριση πελατών, χωρίς φανταστικά δεδομένα.
+    # Πρόσφατα γεγονότα (5 τελευταία ανοίγματα)
+    recent = get_recent_events(limit=5)
+    if recent:
+        context_lines.append("📌 *Πρόσφατες δραστηριότητες:*")
+        for ev in recent:
+            context_lines.append(f"• {ev['name']} ({ev['email']}) – {ev['package']}, {ev['size']} τ.μ. – σκορ {ev['score']} – άνοιξε {ev['open_count']} φορές")
+
+    # Τελευταία ανάλυση γενικά
+    latest = get_latest_analysis()
+    if latest:
+        context_lines.append(f"\n📊 *Τελευταία ανάλυση:*\n{latest['analysis_text']}")
+
+    context = "\n".join(context_lines) if context_lines else ""
+
+    # Αν το μήνυμα περιέχει email, προσθέτουμε στατιστικά για εκείνον τον πελάτη
+    email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', text)
+    if email_match:
+        email = email_match.group(0)
+        stats = get_client_stats(email)
+        if stats:
+            context += f"\n\n📈 *Στατιστικά για {stats['name']} ({email}):*\n"
+            context += f"• Σύνολο ανοιγμάτων: {stats['total_opens']}\n"
+            context += f"• Πρώτο άνοιγμα: {stats['first_open']}\n"
+            context += f"• Τελευταίο σκορ: {stats['latest_score']}\n"
+
+    prompt = f"""Είσαι ο βοηθός του Παντελή, ιδιοκτήτη της 10deco. Ο Παντελής σε ρωτάει κάτι. Εσύ:
+
+- Απευθύνεσαι σε αυτόν με το μικρό του όνομα "Παντελή".
+- **Χρησιμοποιείς ΜΟΝΟ τα δεδομένα που σου δίνονται παρακάτω.** Δεν επινοείς πελάτες, ανοίγματα, ή καμπάνιες.
+- Απαντάς με βάση αυτά τα πραγματικά δεδομένα. Αν δεν υπάρχει πληροφορία, λες "Δεν έχω αυτή την πληροφορία".
+- Δίνεις συμβουλές μόνο για πωλήσεις, διακόσμηση, ή διαχείριση πελατών.
 - Κρατάς τις απαντήσεις σύντομες (2-3 προτάσεις), εκτός αν ζητηθεί αναλυτική απάντηση.
+
+{context}
 
 Μήνυμα του Παντελή: {text}"""
 
@@ -151,8 +204,8 @@ def telegram_webhook():
     payload = {
         "model": "deepseek-chat",
         "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.5,   # μειώνουμε λίγο την δημιουργικότητα
-        "max_tokens": 400     # αυξάνουμε για να μην κόβεται
+        "temperature": 0.5,
+        "max_tokens": 400
     }
     try:
         resp = requests.post(DEEPSEEK_URL, json=payload, headers=headers, timeout=15)
@@ -164,6 +217,7 @@ def telegram_webhook():
     send_telegram_message(chat_id, reply)
     return jsonify({"status": "ok"}), 200
 
+# ========== ΒΟΗΘΗΤΙΚΑ ENDPOINTS ==========
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({"status": "healthy"}), 200
