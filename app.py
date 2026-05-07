@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 import json
 from flask import Flask, request, jsonify
@@ -8,6 +9,7 @@ app = Flask(__name__)
 DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY', '')
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
+WP_API_TOKEN = os.environ.get('WP_API_TOKEN', '')  # νέο environment variable
 
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 
@@ -35,7 +37,6 @@ def webhook():
     opens = data.get('opens_count', 1)
     ip_changed = data.get('ip_changed', False)
 
-    # Νέο prompt με βαθμολογία, συναίσθημα, πρόταση, ώρα
     prompt = f"""Είσαι σύμβουλος πωλήσεων διακόσμησης. Ανάλυσε συμπεριφορά πελάτη. Στοιχεία:
 
 - Ανοίγματα email: {opens} φορές
@@ -61,7 +62,7 @@ def webhook():
         "model": "deepseek-chat",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.5,
-        "max_tokens": 200   # αυξημένο για να χωράει η απάντηση
+        "max_tokens": 200
     }
     try:
         resp = requests.post(DEEPSEEK_URL, json=payload, headers=headers, timeout=15)
@@ -69,6 +70,37 @@ def webhook():
         advice = resp.json()['choices'][0]['message']['content']
     except Exception as e:
         advice = f"AI error: {str(e)}"
+
+    # --- Προσθήκη: εξαγωγή βαθμολογίας και κλήση στο WordPress ---
+    try:
+        # Αναζήτηση μοτίβου "Πιθανότητα κλεισίματος (1-10): X/10"
+        score_match = re.search(r'\(1-10\):\s*(\d+)/10', advice)
+        score = int(score_match.group(1)) if score_match else 0
+    except:
+        score = 0
+
+    # Αν η βαθμολογία είναι > 6, στείλε αίτημα στο WordPress
+    if score > 6 and WP_API_TOKEN:
+        wp_endpoint = "https://10deco.gr/wp-json/deco/v1/send-reminder"
+        reminder_data = {
+            "email": data.get('email'),
+            "name": data.get('name'),
+            "package": data.get('package'),
+            "size": data.get('size'),
+            "score": score,
+            "advice": advice  # προαιρετικά, μπορείς να στείλεις ολόκληρη την ανάλυση
+        }
+        wp_headers = {
+            "Content-Type": "application/json",
+            "X-API-Token": WP_API_TOKEN
+        }
+        try:
+            # Non-blocking request (timeout 3 sec)
+            requests.post(wp_endpoint, json=reminder_data, headers=wp_headers, timeout=3)
+        except Exception as e:
+            # Απλά log, δεν σταματάμε τη ροή
+            print(f"Reminder API error: {e}")
+    # ---------------------------------------------------------
 
     telegram_msg = f"🎯 *Ανάλυση Πώλησης*\n\n{advice}"
     requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
