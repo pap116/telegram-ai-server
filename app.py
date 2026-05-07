@@ -1,12 +1,8 @@
 import os
-import re
 import requests
-import json
+import re
+from datetime import datetime
 from flask import Flask, request, jsonify
-import os
-import requests
-import re
-from datetime import datetime   # προστέθηκε
 
 app = Flask(__name__)
 
@@ -51,8 +47,8 @@ def webhook():
         except:
             pass
 
-    # Νέο prompt (ίδιο όπως πριν)
-    prompt = f"""Είσαι σύμβουλος πωλήσεων διακόσμησης. Ανάλυσε συμπεριφορά πελάτη. Στοιχεία:
+    # Νέο prompt με 6 γραμμές (πλούσιο)
+    prompt = f"""Είσαι σύμβουλος πωλήσεων διακόσμησης και Φημισμένος και Ταλαντούχος Interior Designer. Ανάλυσε συμπεριφορά πελάτη. Στοιχεία:
 
 - Ανοίγματα email: {opens} φορές
 - Τελευταία ώρα: {data.get('time')}
@@ -60,14 +56,16 @@ def webhook():
 - IP: {ip} (περιοχή: {location})
 - Η IP άλλαξε: {"ΝΑΙ (κινητικότητα)" if ip_changed else "ΟΧΙ (σταθερή)"}
 
-Απάντησε ΜΟΝΟ με 4 γραμμές, όπως φαίνονται παρακάτω.
+Απάντησε ΜΟΝΟ με 6 γραμμές, ακριβώς όπως φαίνονται παρακάτω. Κράτα τη γλώσσα φιλική, επαγγελματική, χωρίς υπερβολές.
 
-1. Πιθανότητα κλεισίματος (1-10): [X/10] - (σύντομη εξήγηση)
-2. Συναισθηματική κατάσταση: (π.χ. "προσεκτικός", "ενθουσιώδης")
-3. Πρόταση επόμενης επαφής: (π.χ. "email", "τηλέφωνο", "αναμονή")
-4. Ιδανική ώρα επικοινωνίας: (π.χ. "απόγευμα 6-8", "πρωί 10-12")
+1. Πιθανότητα κλεισίματος (1-10): [X/10] - (μία σύντομη εξήγηση)
+2. Συναισθηματική κατάσταση: (π.χ. "προσεκτικός", "ενθουσιώδης", "αναβλητικός")
+3. Πρόταση επόμενης επαφής: (π.χ. "τηλέφωνο αύριο 10-12", "email με έκπτωση", "περιμένετε 2 ημέρες")
+4. Ιδανικό μήνυμα που θα του στείλεις (αυτούσιο, σε ευθεία ομιλία, μέχρι 15 λέξεις)
+5. Εκτίμηση budget/οικονομικής άνεσης: (π.χ. "Υψηλή (Luxury)", "Μεσαία (Basic)", "Χαμηλή")
+6. Συγκεκριμένη ενέργεια για μένα ΤΩΡΑ: (π.χ. "πάρε τον τηλέφωνο αμέσως", "στείλε email με link για ραντεβού")
 
-Μην γράψεις τίποτα άλλο."""
+Μην γράψεις τίποτα άλλο, ούτε εισαγωγές."""
 
     headers = {
         "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
@@ -77,7 +75,7 @@ def webhook():
         "model": "deepseek-chat",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.5,
-        "max_tokens": 200
+        "max_tokens": 350    # αυξημένο για να χωράνε οι 6 γραμμές
     }
     try:
         resp = requests.post(DEEPSEEK_URL, json=payload, headers=headers, timeout=15)
@@ -86,7 +84,7 @@ def webhook():
     except Exception as e:
         advice = f"AI error: {str(e)}"
 
-    # Εξαγωγή βαθμολογίας
+    # Εξαγωγή βαθμολογίας από την 1η γραμμή (ίδια λογική)
     try:
         score_match = re.search(r'\(1-10\):\s*(\d+)/10', advice)
         score = int(score_match.group(1)) if score_match else 0
@@ -99,7 +97,7 @@ def webhook():
                   json={"chat_id": TELEGRAM_CHAT_ID, "text": telegram_msg, "parse_mode": "Markdown"},
                   timeout=5)
 
-    # === ΑΠΟΦΑΣΗ ΑΠΟΣΤΟΛΗΣ REMINDER (μόνο αν score>6 ΚΑΙ έχουν περάσει 24 ώρες από το πρώτο άνοιγμα) ===
+    # === ΑΠΟΦΑΣΗ ΑΠΟΣΤΟΛΗΣ REMINDER (score>6 και 24 ώρες από το πρώτο άνοιγμα) ===
     if score > 6 and hours_since_first_open >= 24:
         wp_endpoint = "https://10deco.gr/wp-json/deco/v1/send-reminder"
         reminder_data = {
@@ -118,7 +116,7 @@ def webhook():
                          timeout=3)
         except Exception as e:
             print(f"Reminder error: {e}")
-    # ===================================================
+    # ==========================================================
 
     return jsonify({"status": "ok"})
 
