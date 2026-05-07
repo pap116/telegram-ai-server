@@ -4,12 +4,10 @@ import re
 from datetime import datetime
 from flask import Flask, request, jsonify
 
-# Εισαγωγή συναρτήσεων βάσης
-from analytics_db import init_db, save_analysis, get_latest_analysis, get_recent_events, get_client_stats, get_all_clients_stats, cleanup_old_analyses, save_reminder, get_reminder_count
+from analytics_db import init_db, save_analysis, get_latest_analysis, get_recent_events, get_client_stats, get_all_prospect_clients, get_client_by_rank, cleanup_old_analyses, save_reminder, get_reminder_count
 
 app = Flask(__name__)
 
-# Environment variables
 DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY', '')
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
@@ -17,7 +15,6 @@ WP_API_TOKEN = os.environ.get('WP_API_TOKEN', '')
 
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 
-# Αρχικοποίηση βάσης και εκκαθάριση παλαιών εγγραφών
 init_db()
 cleanup_old_analyses(months=6)
 
@@ -40,7 +37,6 @@ def send_telegram_message(chat_id, text):
     except Exception as e:
         print(f"Telegram send error: {e}")
 
-# ========== WEBHOOK ΑΠΟ ΤΟ PLUGIN (tracking ανοιγμάτων) ==========
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.get_json()
@@ -53,7 +49,6 @@ def webhook():
     ip_changed = data.get('ip_changed', False)
     first_open_time_str = data.get('first_open_time', '')
 
-    # Υπολογισμός ωρών από το πρώτο άνοιγμα (για reminder delay)
     hours_since_first_open = 0
     if first_open_time_str:
         try:
@@ -63,7 +58,6 @@ def webhook():
         except:
             pass
 
-    # Prompt ανάλυσης (6 γραμμές)
     prompt = f"""Είσαι σύμβουλος πωλήσεων διακόσμησης. Ανάλυσε συμπεριφορά πελάτη. Στοιχεία:
 
 - Ανοίγματα email: {opens} φορές
@@ -72,7 +66,7 @@ def webhook():
 - IP: {ip} (περιοχή: {location})
 - Η IP άλλαξε: {"ΝΑΙ (κινητικότητα)" if ip_changed else "ΟΧΙ (σταθερή)"}
 
-Απάντησε ΜΟΝΟ με 6 γραμμές, ακριβώς όπως φαίνονται παρακάτω.
+Απάντησε ΜΟΝΟ με 6 γραμμές:
 
 1. Πιθανότητα κλεισίματος (1-10): [X/10] - (μία σύντομη εξήγηση)
 2. Συναισθηματική κατάσταση: (π.χ. "προσεκτικός", "ενθουσιώδης")
@@ -88,7 +82,7 @@ def webhook():
         "model": "deepseek-chat",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.5,
-        "max_tokens": 450   # Αυξημένο για να μην κόβονται οι απαντήσεις
+        "max_tokens": 450
     }
     try:
         resp = requests.post(DEEPSEEK_URL, json=payload, headers=headers, timeout=15)
@@ -97,14 +91,12 @@ def webhook():
     except Exception as e:
         advice = f"AI error: {str(e)}"
 
-    # Εξαγωγή βαθμολογίας
     try:
         score_match = re.search(r'\(1-10\):\s*(\d+)/10', advice)
         score = int(score_match.group(1)) if score_match else 0
     except:
         score = 0
 
-    # Αποθήκευση ανάλυσης στη βάση
     save_analysis(
         email=data.get('email'),
         name=data.get('name'),
@@ -116,11 +108,9 @@ def webhook():
         score=score
     )
 
-    # Αποστολή ανάλυσης στον admin (Telegram)
     telegram_msg = f"🎯 *Ανάλυση Πώλησης*\n\n{advice}"
     send_telegram_message(TELEGRAM_CHAT_ID, telegram_msg)
 
-    # Απόφαση αποστολής reminder (score>6 και μετά από 24 ώρες)
     if score > 6 and hours_since_first_open >= 24:
         wp_endpoint = "https://10deco.gr/wp-json/deco/v1/send-reminder"
         reminder_data = {
@@ -142,7 +132,6 @@ def webhook():
 
     return jsonify({"status": "ok"})
 
-# ========== WEBHOOK ΓΙΑ ΣΥΝΟΜΙΛΙΑ ΜΕ ΤΟ BOT (admin μόνο) ==========
 @app.route('/webhook_telegram', methods=['POST'])
 def telegram_webhook():
     update = request.get_json()
@@ -156,28 +145,46 @@ def telegram_webhook():
     if not text:
         return jsonify({"status": "ok"}), 200
 
-    # Μόνο ο admin (εσύ) μπορεί να συνομιλεί
     if str(chat_id) != str(TELEGRAM_CHAT_ID):
         return jsonify({"status": "ok"}), 200
 
-    # Δημιουργία context από τη βάση
     context_lines = []
 
-    # Πρόσφατα γεγονότα (5 τελευταία ανοίγματα)
-    recent = get_recent_events(limit=5)
-    if recent:
-        context_lines.append("📌 *Πρόσφατες δραστηριότητες:*")
-        for ev in recent:
-            context_lines.append(f"• {ev['name']} ({ev['email']}) – {ev['package']}, {ev['size']} τ.μ. – σκορ {ev['score']} – άνοιξε {ev['open_count']} φορές")
+    # Λίστα όλων των πιθανών πελατών με αρίθμηση
+    prospects = get_all_prospect_clients(limit=None, min_score=5)
+    if prospects:
+        context_lines.append("📋 *Υποψήφιοι πελάτες (σκορ ≥5):*")
+        for p in prospects:
+            emoji = "🔥" if p['score'] >= 8 else "⭐" if p['score'] >= 6 else "ℹ️"
+            context_lines.append(
+                f"{p['rank']}. {emoji} {p['name']} ({p['email']}) – {p['package']}, {p['size']} τ.μ. – "
+                f"σκορ {p['score']}/10 – {p['open_count']} ανοίγματα"
+            )
+    else:
+        context_lines.append("📋 Δεν υπάρχουν πελάτες με σκορ ≥5.")
 
-    # Τελευταία ανάλυση γενικά
     latest = get_latest_analysis()
     if latest:
         context_lines.append(f"\n📊 *Τελευταία ανάλυση:*\n{latest['analysis_text']}")
 
-    context = "\n".join(context_lines) if context_lines else ""
+    context = "\n".join(context_lines)
 
-    # Αν το μήνυμα περιέχει email, προσθέτουμε στατιστικά για εκείνον τον πελάτη
+    # Αν το μήνυμα ζητά συγκεκριμένο αριθμό
+    rank_match = re.search(r'(?:ο|τον|για τον|για τον αριθμό)\s*(\d+)', text, re.IGNORECASE)
+    if rank_match:
+        rank = int(rank_match.group(1))
+        client = get_client_by_rank(rank, min_score=5)
+        if client:
+            context += f"\n\n🔍 *Στοιχεία για τον πελάτη #{client['rank']} ({client['name']}):*\n"
+            context += f"• Email: {client['email']}\n"
+            context += f"• Πακέτο: {client['package']}, {client['size']} τ.μ.\n"
+            context += f"• Σκορ: {client['score']}/10\n"
+            context += f"• Ανοίγματα: {client['open_count']}\n"
+            stats = get_client_stats(client['email'])
+            if stats and stats.get('first_open'):
+                context += f"• Πρώτο άνοιγμα: {stats['first_open']}\n"
+
+    # Αν το μήνυμα περιέχει email, προσθέτουμε στατιστικά
     email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', text)
     if email_match:
         email = email_match.group(0)
@@ -191,7 +198,7 @@ def telegram_webhook():
     prompt = f"""Είσαι ο βοηθός του Παντελή, ιδιοκτήτη της 10deco. Ο Παντελής σε ρωτάει κάτι. Εσύ:
 
 - Απευθύνεσαι σε αυτόν με το μικρό του όνομα "Παντελή".
-- **Χρησιμοποιείς ΜΟΝΟ τα δεδομένα που σου δίνονται παρακάτω.** Δεν επινοείς πελάτες, ανοίγματα, ή καμπάνιες.
+- Χρησιμοποιείς ΜΟΝΟ τα δεδομένα που σου δίνονται παρακάτω. Δεν επινοείς πελάτες, ανοίγματα, ή καμπάνιες.
 - Απαντάς με βάση αυτά τα πραγματικά δεδομένα. Αν δεν υπάρχει πληροφορία, λες "Δεν έχω αυτή την πληροφορία".
 - Δίνεις συμβουλές μόνο για πωλήσεις, διακόσμηση, ή διαχείριση πελατών.
 - Κρατάς τις απαντήσεις σύντομες (2-3 προτάσεις), εκτός αν ζητηθεί αναλυτική απάντηση.
@@ -217,7 +224,6 @@ def telegram_webhook():
     send_telegram_message(chat_id, reply)
     return jsonify({"status": "ok"}), 200
 
-# ========== ΒΟΗΘΗΤΙΚΑ ENDPOINTS ==========
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({"status": "healthy"}), 200
