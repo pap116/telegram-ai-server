@@ -8,7 +8,7 @@ app = Flask(__name__)
 
 DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY', '')
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
-TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
+TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')  # Το δικό σου chat ID (admin)
 WP_API_TOKEN = os.environ.get('WP_API_TOKEN', '')
 
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
@@ -26,14 +26,13 @@ def get_ip_location(ip):
         return "unknown"
 
 def send_telegram_message(chat_id, text):
-    """Βοηθητική συνάρτηση για αποστολή μηνύματος στο Telegram"""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
         requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}, timeout=5)
     except Exception as e:
         print(f"Telegram send error: {e}")
 
-# ========== ΥΠΑΡΧΟΝ WEBHOOK (από το plugin) ==========
+# ========== WEBHOOK ΑΠΟ ΤΟ PLUGIN (tracking ανοιγμάτων) ==========
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.get_json()
@@ -46,7 +45,6 @@ def webhook():
     ip_changed = data.get('ip_changed', False)
     first_open_time_str = data.get('first_open_time', '')
 
-    # Υπολογισμός ωρών από το πρώτο άνοιγμα
     hours_since_first_open = 0
     if first_open_time_str:
         try:
@@ -56,8 +54,7 @@ def webhook():
         except:
             pass
 
-    # Prompt με 6 γραμμές
-    prompt = f"""Είσαι σύμβουλος πωλήσεων διακόσμησης και Φημισμένος και Ταλαντούχος Interior Designer. Ανάλυσε συμπεριφορά πελάτη. Στοιχεία:
+    prompt = f"""Είσαι σύμβουλος πωλήσεων διακόσμησης. Ανάλυσε συμπεριφορά πελάτη. Στοιχεία:
 
 - Ανοίγματα email: {opens} φορές
 - Τελευταία ώρα: {data.get('time')}
@@ -65,10 +62,10 @@ def webhook():
 - IP: {ip} (περιοχή: {location})
 - Η IP άλλαξε: {"ΝΑΙ (κινητικότητα)" if ip_changed else "ΟΧΙ (σταθερή)"}
 
-Απάντησε ΜΟΝΟ με 6 γραμμές, ακριβώς όπως φαίνονται παρακάτω.
+Απάντησε ΜΟΝΟ με 6 γραμμές:
 
-1. Πιθανότητα κλεισίματος (1-10): [X/10] - (μία σύντομη εξήγηση)
-2. Συναισθηματική κατάσταση: (π.χ. "προσεκτικός", "ενθουσιώδης", "αναβλητικός")
+1. Πιθανότητα κλεισίματος (1-10): [X/10] - (σύντομη εξήγηση)
+2. Συναισθηματική κατάσταση: (π.χ. "προσεκτικός", "ενθουσιώδης")
 3. Πρόταση επόμενης επαφής: (π.χ. "τηλέφωνο αύριο 10-12", "email με έκπτωση")
 4. Ιδανικό μήνυμα που θα του στείλεις (αυτούσιο, σε ευθεία ομιλία, μέχρι 15 λέξεις)
 5. Εκτίμηση budget/οικονομικής άνεσης: (π.χ. "Υψηλή (Luxury)", "Μεσαία (Basic)")
@@ -76,10 +73,7 @@ def webhook():
 
 Μην γράψεις τίποτα άλλο."""
 
-    headers = {
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": "deepseek-chat",
         "messages": [{"role": "user", "content": prompt}],
@@ -93,18 +87,17 @@ def webhook():
     except Exception as e:
         advice = f"AI error: {str(e)}"
 
-    # Εξαγωγή βαθμολογίας
     try:
         score_match = re.search(r'\(1-10\):\s*(\d+)/10', advice)
         score = int(score_match.group(1)) if score_match else 0
     except:
         score = 0
 
-    # Αποστολή ανάλυσης στο Telegram
-    telegram_msg = f"🎯 *Ανάλυση Πιθανής Πώλησης*\n\n{advice}"
+    # Στέλνουμε την ανάλυση ΜΟΝΟ σε εσένα (admin)
+    telegram_msg = f"🎯 *Ανάλυση Πώλησης*\n\n{advice}"
     send_telegram_message(TELEGRAM_CHAT_ID, telegram_msg)
 
-    # Reminder αν score>6 και 24 ώρες
+    # Reminder (μόνο αν score>6 και >24 ώρες)
     if score > 6 and hours_since_first_open >= 24:
         wp_endpoint = "https://10deco.gr/wp-json/deco/v1/send-reminder"
         reminder_data = {
@@ -126,30 +119,30 @@ def webhook():
 
     return jsonify({"status": "ok"})
 
-# ========== ΝΕΟ WEBHOOK ΓΙΑ ΣΥΝΟΜΙΛΙΑ ΜΕ ΤΟ BOT ==========
+# ========== WEBHOOK ΓΙΑ ΣΥΝΟΜΙΛΙΑ ΜΕ ΤΟ BOT (admin μόνο) ==========
 @app.route('/webhook_telegram', methods=['POST'])
 def telegram_webhook():
-    """Δέχεται μηνύματα από το Telegram και απαντάει μέσω DeepSeek"""
     update = request.get_json()
     if not update or 'message' not in update:
         return jsonify({"status": "ok"}), 200
 
     message = update['message']
     chat_id = message['chat']['id']
-    text = message.get('text', '')
+    text = message.get('text', '').strip()
 
     if not text:
         return jsonify({"status": "ok"}), 200
 
-    # Αποφυγή απάντησης σε μηνύματα που προέρχονται από τον ίδιο τον bot (θα είχε loop)
-    # (δεν χρειάζεται περαιτέρω έλεγχος)
+    # Αν ο χρήστης ΔΕΝ είναι ο admin (εσύ), αγνόησέ τον
+    if str(chat_id) != str(TELEGRAM_CHAT_ID):
+        # Μπορείς προαιρετικά να στείλεις μήνυμα ότι δεν επιτρέπεται
+        send_telegram_message(chat_id, "Αυτό το bot χρησιμοποιείται μόνο από τον διαχειριστή της 10deco.")
+        return jsonify({"status": "ok"}), 200
 
-    # Καλούμε DeepSeek για απάντηση
-    prompt = f"Απάντησε στο εξής μήνυμα ως φιλικός σύμβουλος διακόσμησης. Να είσαι συνοπτικός.\n\nΜήνυμα: {text}"
-    headers = {
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    # Εδώ είσαι εσύ (admin) – μπορείς να ρωτήσεις ότι θέλεις
+    prompt = f"Είσαι σύμβουλος πωλήσεων της 10deco. Ο χρήστης είναι ο διαχειριστής (ο διακοσμητής). Απάντησε στο ερώτημά του σχετικά με την πορεία των πωλήσεων ή δώσε συμβουλές. Μήνυμα: {text}"
+    
+    headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": "deepseek-chat",
         "messages": [{"role": "user", "content": prompt}],
@@ -163,9 +156,7 @@ def telegram_webhook():
     except Exception as e:
         reply = f"Σφάλμα: {str(e)}"
 
-    # Στέλνουμε την απάντηση πίσω στο Telegram
     send_telegram_message(chat_id, reply)
-
     return jsonify({"status": "ok"}), 200
 
 @app.route('/health', methods=['GET'])
