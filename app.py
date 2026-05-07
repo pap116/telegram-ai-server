@@ -9,7 +9,7 @@ app = Flask(__name__)
 DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY', '')
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
-WP_API_TOKEN = os.environ.get('WP_API_TOKEN', '')  # νέο environment variable
+WP_API_TOKEN = os.environ.get('WP_API_TOKEN', '2f5e8a1b3c4d5e6f7a8b9c0d')  # νέο environment variable
 
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 
