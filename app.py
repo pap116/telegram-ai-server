@@ -48,8 +48,6 @@ def webhook():
     if not data:
         return jsonify({"error": "no data"}), 400
 
-    print(f"🔍 AI RECEIVED: address={data.get('address')}, city={data.get('city')}, zip={data.get('zip')}")
-
     ip = data.get('ip', '')
     location = get_ip_location(ip)
     opens = data.get('opens_count', 1)
