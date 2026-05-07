@@ -9,12 +9,11 @@ app = Flask(__name__)
 DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY', '')
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
-WP_API_TOKEN = os.environ.get('WP_API_TOKEN', '2f5e8a1b3c4d5e6f7a8b9c0d')  # νέο environment variable
+WP_API_TOKEN = os.environ.get('WP_API_TOKEN', '2f5e8a1b3c4d5e6f7a8b9c0d')  # νέο token
 
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 
 def get_ip_location(ip):
-    """Επιστρέφει πόλη και χώρα για μια IP (free ip-api.com)"""
     if not ip or ip.startswith('127.') or ip == '::1':
         return "local"
     try:
@@ -43,16 +42,16 @@ def webhook():
 - Τελευταία ώρα: {data.get('time')}
 - Πακέτο: {data.get('package')}, τ.μ.: {data.get('size')}
 - IP: {ip} (περιοχή: {location})
-- Η IP άλλαξε: {"ΝΑΙ (κινητικότητα, σοβαρό ενδιαφέρον)" if ip_changed else "ΟΧΙ (σταθερή συσκευή)"}
+- Η IP άλλαξε: {"ΝΑΙ (κινητικότητα)" if ip_changed else "ΟΧΙ (σταθερή)"}
 
-Απάντησε ΜΟΝΟ με 4 γραμμές, όπως φαίνονται παρακάτω. Κράτα τη γλώσσα φιλική, επαγγελματική, χωρίς υπερβολές.
+Απάντησε ΜΟΝΟ με 4 γραμμές, όπως φαίνονται παρακάτω.
 
-1. Πιθανότητα κλεισίματος (1-10): [X/10] - (μία σύντομη εξήγηση)
-2. Συναισθηματική κατάσταση: (π.χ. "προσεκτικός", "ενθουσιώδης", "αναβλητικός")
-3. Πρόταση επόμενης επαφής: (π.χ. "Στείλτε ένα ευγενικό email", "Πάρτε τον τηλέφωνο", "Περιμένετε 1 ημέρα")
-4. Ιδανική ώρα επικοινωνίας: (π.χ. "απόγευμα 6-8", "πρωί 10-12") με βάση την ώρα που άνοιξε το email
+1. Πιθανότητα κλεισίματος (1-10): [X/10] - (σύντομη εξήγηση)
+2. Συναισθηματική κατάσταση: (π.χ. "προσεκτικός", "ενθουσιώδης")
+3. Πρόταση επόμενης επαφής: (π.χ. "email", "τηλέφωνο", "αναμονή")
+4. Ιδανική ώρα επικοινωνίας: (π.χ. "απόγευμα 6-8", "πρωί 10-12")
 
-Μην γράψεις τίποτα άλλο, ούτε εισαγωγές."""
+Μην γράψεις τίποτα άλλο."""
 
     headers = {
         "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
@@ -71,15 +70,13 @@ def webhook():
     except Exception as e:
         advice = f"AI error: {str(e)}"
 
-    # --- Προσθήκη: εξαγωγή βαθμολογίας και κλήση στο WordPress ---
+    # === ΕΞΑΓΩΓΗ ΒΑΘΜΟΛΟΓΙΑΣ ΚΑΙ ΚΛΗΣΗ ΣΤΟ WORDPRESS ===
     try:
-        # Αναζήτηση μοτίβου "Πιθανότητα κλεισίματος (1-10): X/10"
         score_match = re.search(r'\(1-10\):\s*(\d+)/10', advice)
         score = int(score_match.group(1)) if score_match else 0
     except:
         score = 0
 
-    # Αν η βαθμολογία είναι > 6, στείλε αίτημα στο WordPress
     if score > 6 and WP_API_TOKEN:
         wp_endpoint = "https://10deco.gr/wp-json/deco/v1/send-reminder"
         reminder_data = {
@@ -87,20 +84,15 @@ def webhook():
             "name": data.get('name'),
             "package": data.get('package'),
             "size": data.get('size'),
-            "score": score,
-            "advice": advice  # προαιρετικά, μπορείς να στείλεις ολόκληρη την ανάλυση
-        }
-        wp_headers = {
-            "Content-Type": "application/json",
-            "X-API-Token": WP_API_TOKEN
+            "score": score
         }
         try:
-            # Non-blocking request (timeout 3 sec)
-            requests.post(wp_endpoint, json=reminder_data, headers=wp_headers, timeout=3)
+            requests.post(wp_endpoint, json=reminder_data,
+                         headers={"Content-Type": "application/json", "X-API-Token": WP_API_TOKEN},
+                         timeout=3)
         except Exception as e:
-            # Απλά log, δεν σταματάμε τη ροή
-            print(f"Reminder API error: {e}")
-    # ---------------------------------------------------------
+            print(f"Reminder error: {e}")
+    # ============================================
 
     telegram_msg = f"🎯 *Ανάλυση Πώλησης*\n\n{advice}"
     requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
