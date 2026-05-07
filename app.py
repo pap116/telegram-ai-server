@@ -4,8 +4,7 @@ import re
 from datetime import datetime
 from flask import Flask, request, jsonify
 
-from analytics_db import init_db, save_analysis, get_latest_analysis, get_recent_events, get_client_stats, get_all_prospect_clients, get_client_by_rank, cleanup_old_analyses, save_reminder, get_reminder_count
-
+from analytics_db import init_db, save_analysis, get_latest_analysis, get_all_prospect_clients, get_client_stats, get_client_by_rank, cleanup_old_analyses, save_reminder, get_reminder_count
 app = Flask(__name__)
 
 DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY', '')
