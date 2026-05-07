@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from flask import Flask, request, jsonify
 
-# Δημιουργία της εφαρμογής Flask (πρέπει να είναι ΠΡΙΝ από τα routes)
+# Δημιουργία της εφαρμογής Flask
 app = Flask(__name__)
 
 # Εισαγωγή συναρτήσεων βάσης
@@ -53,6 +53,8 @@ def webhook():
     opens = data.get('opens_count', 1)
     ip_changed = data.get('ip_changed', False)
     first_open_time_str = data.get('first_open_time', '')
+    client_name = data.get('name', '')
+    client_email = data.get('email', '')
 
     hours_since_first_open = 0
     if first_open_time_str:
@@ -102,9 +104,10 @@ def webhook():
     except:
         score = 0
 
+    # Αποθήκευση ανάλυσης στη βάση
     save_analysis(
-        email=data.get('email'),
-        name=data.get('name'),
+        email=client_email,
+        name=client_name,
         package=data.get('package'),
         size=data.get('size'),
         open_count=opens,
@@ -113,14 +116,17 @@ def webhook():
         score=score
     )
 
-    telegram_msg = f"🎯 *Ανάλυση Πώλησης*\n\n{advice}"
+    # Δημιουργία μηνύματος με όνομα και email του πελάτη
+    header_info = f"👤 *Πελάτης:* {client_name} ({client_email})\n"
+    telegram_msg = f"🎯 *Ανάλυση Πώλησης*\n\n{header_info}\n{advice}"
     send_telegram_message(TELEGRAM_CHAT_ID, telegram_msg)
 
+    # Απόφαση αποστολής reminder
     if score > 6 and hours_since_first_open >= 24:
         wp_endpoint = "https://10deco.gr/wp-json/deco/v1/send-reminder"
         reminder_data = {
-            "email": data.get('email'),
-            "name": data.get('name'),
+            "email": client_email,
+            "name": client_name,
             "package": data.get('package'),
             "size": data.get('size'),
             "score": score,
@@ -156,9 +162,10 @@ def telegram_webhook():
 
     context_lines = []
 
+    # Λίστα υποψηφίων πελατών με αρίθμηση (σκορ ≥ 5)
     prospects = get_all_prospect_clients(limit=None, min_score=5)
     if prospects:
-        context_lines.append("📋 *Υποψήφιοι πελάτες (σκορ ≥5):*")
+        context_lines.append("📋 *Υποψήφιοι πελάτες (τελευταίο σκορ ≥5):*")
         for p in prospects:
             emoji = "🔥" if p['score'] >= 8 else "⭐" if p['score'] >= 6 else "ℹ️"
             context_lines.append(
@@ -168,12 +175,14 @@ def telegram_webhook():
     else:
         context_lines.append("📋 Δεν υπάρχουν πελάτες με σκορ ≥5.")
 
+    # Τελευταία ανάλυση (για γενική εικόνα)
     latest = get_latest_analysis()
     if latest:
         context_lines.append(f"\n📊 *Τελευταία ανάλυση:*\n{latest['analysis_text']}")
 
     context = "\n".join(context_lines)
 
+    # Αναγνώριση ερώτησης για συγκεκριμένο αριθμό
     rank_match = re.search(r'(?:ο|τον|για τον|για τον αριθμό)\s*(\d+)', text, re.IGNORECASE)
     if rank_match:
         rank = int(rank_match.group(1))
@@ -188,6 +197,7 @@ def telegram_webhook():
             if stats and stats.get('first_open'):
                 context += f"• Πρώτο άνοιγμα: {stats['first_open']}\n"
 
+    # Αναγνώριση ερώτησης με email
     email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', text)
     if email_match:
         email = email_match.group(0)
