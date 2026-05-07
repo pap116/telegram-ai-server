@@ -88,7 +88,7 @@ def webhook():
         "model": "deepseek-chat",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.5,
-        "max_tokens": 350
+        "max_tokens": 450   # Αυξημένο για να μην κόβονται οι απαντήσεις
     }
     try:
         resp = requests.post(DEEPSEEK_URL, json=payload, headers=headers, timeout=15)
