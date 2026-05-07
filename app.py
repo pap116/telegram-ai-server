@@ -35,18 +35,23 @@ def webhook():
     opens = data.get('opens_count', 1)
     ip_changed = data.get('ip_changed', False)
 
-    prompt = f"""Κάνε ένα σύντομο ψυχογράφημα για πελάτη που άνοιξε email:
+    # Νέο prompt με βαθμολογία, συναίσθημα, πρόταση, ώρα
+    prompt = f"""Είσαι σύμβουλος πωλήσεων διακόσμησης. Ανάλυσε συμπεριφορά πελάτη. Στοιχεία:
 
-- Άνοιξε {opens} φορές
-- Τελευταία φορά: {data.get('time')}
+- Ανοίγματα email: {opens} φορές
+- Τελευταία ώρα: {data.get('time')}
 - Πακέτο: {data.get('package')}, τ.μ.: {data.get('size')}
-- IP: {ip} (τοποθεσία: {location})
-- Η IP άλλαξε: {"Ναι" if ip_changed else "Όχι"}
+- IP: {ip} (περιοχή: {location})
+- Η IP άλλαξε: {"ΝΑΙ (κινητικότητα, σοβαρό ενδιαφέρον)" if ip_changed else "ΟΧΙ (σταθερή συσκευή)"}
 
-Δώσε 3 γραμμές:
-1. Επίπεδο ενδιαφέροντος (χαμηλό/μέτριο/υψηλό) και γιατί
-2. Αν δείχνει κινητικότητα (π.χ. άνοιξε από άλλη τοποθεσία)
-3. Μία συγκεκριμένη ενέργεια για μένα"""
+Απάντησε ΜΟΝΟ με 4 γραμμές, όπως φαίνονται παρακάτω. Κράτα τη γλώσσα φιλική, επαγγελματική, χωρίς υπερβολές.
+
+1. Πιθανότητα κλεισίματος (1-10): [X/10] - (μία σύντομη εξήγηση)
+2. Συναισθηματική κατάσταση: (π.χ. "προσεκτικός", "ενθουσιώδης", "αναβλητικός")
+3. Πρόταση επόμενης επαφής: (π.χ. "Στείλτε ένα ευγενικό email", "Πάρτε τον τηλέφωνο", "Περιμένετε 1 ημέρα")
+4. Ιδανική ώρα επικοινωνίας: (π.χ. "απόγευμα 6-8", "πρωί 10-12") με βάση την ώρα που άνοιξε το email
+
+Μην γράψεις τίποτα άλλο, ούτε εισαγωγές."""
 
     headers = {
         "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
@@ -56,7 +61,7 @@ def webhook():
         "model": "deepseek-chat",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.5,
-        "max_tokens": 120
+        "max_tokens": 200   # αυξημένο για να χωράει η απάντηση
     }
     try:
         resp = requests.post(DEEPSEEK_URL, json=payload, headers=headers, timeout=15)
@@ -65,7 +70,7 @@ def webhook():
     except Exception as e:
         advice = f"AI error: {str(e)}"
 
-    telegram_msg = f"🧠 *Ψυχογράφημα*\n\n{advice}"
+    telegram_msg = f"🎯 *Ανάλυση Πώλησης*\n\n{advice}"
     requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
                   json={"chat_id": TELEGRAM_CHAT_ID, "text": telegram_msg, "parse_mode": "Markdown"},
                   timeout=5)
