@@ -4,8 +4,13 @@ import re
 from datetime import datetime
 from flask import Flask, request, jsonify
 
+# Δημιουργία της εφαρμογής Flask (πρέπει να είναι ΠΡΙΝ από τα routes)
+app = Flask(__name__)
+
+# Εισαγωγή συναρτήσεων βάσης
 from analytics_db import init_db, save_analysis, get_latest_analysis, get_all_prospect_clients, get_client_stats, get_client_by_rank, cleanup_old_analyses, save_reminder, get_reminder_count
 
+# Environment variables
 DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY', '')
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
@@ -13,6 +18,7 @@ WP_API_TOKEN = os.environ.get('WP_API_TOKEN', '')
 
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 
+# Αρχικοποίηση βάσης και εκκαθάριση παλαιών εγγραφών
 init_db()
 cleanup_old_analyses(months=6)
 
@@ -35,6 +41,7 @@ def send_telegram_message(chat_id, text):
     except Exception as e:
         print(f"Telegram send error: {e}")
 
+# ========== WEBHOOK ΑΠΟ ΤΟ PLUGIN ==========
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.get_json()
@@ -66,7 +73,7 @@ def webhook():
 
 Απάντησε ΜΟΝΟ με 6 γραμμές:
 
-1. Πιθανότητα κλεισίματος (1-10): [X/10] - (μία σύντομη εξήγηση)
+1. Πιθανότητα κλεισίματος (1-10): [X/10] - (σύντομη εξήγηση)
 2. Συναισθηματική κατάσταση: (π.χ. "προσεκτικός", "ενθουσιώδης")
 3. Πρόταση επόμενης επαφής: (π.χ. "τηλέφωνο αύριο 10-12", "email με έκπτωση")
 4. Ιδανικό μήνυμα που θα του στείλεις (αυτούσιο, σε ευθεία ομιλία, μέχρι 15 λέξεις)
@@ -130,6 +137,7 @@ def webhook():
 
     return jsonify({"status": "ok"})
 
+# ========== WEBHOOK ΓΙΑ ΣΥΝΟΜΙΛΙΑ ΜΕ ΤΟ BOT ==========
 @app.route('/webhook_telegram', methods=['POST'])
 def telegram_webhook():
     update = request.get_json()
@@ -148,7 +156,6 @@ def telegram_webhook():
 
     context_lines = []
 
-    # Λίστα όλων των πιθανών πελατών με αρίθμηση
     prospects = get_all_prospect_clients(limit=None, min_score=5)
     if prospects:
         context_lines.append("📋 *Υποψήφιοι πελάτες (σκορ ≥5):*")
@@ -167,7 +174,6 @@ def telegram_webhook():
 
     context = "\n".join(context_lines)
 
-    # Αν το μήνυμα ζητά συγκεκριμένο αριθμό
     rank_match = re.search(r'(?:ο|τον|για τον|για τον αριθμό)\s*(\d+)', text, re.IGNORECASE)
     if rank_match:
         rank = int(rank_match.group(1))
@@ -182,7 +188,6 @@ def telegram_webhook():
             if stats and stats.get('first_open'):
                 context += f"• Πρώτο άνοιγμα: {stats['first_open']}\n"
 
-    # Αν το μήνυμα περιέχει email, προσθέτουμε στατιστικά
     email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', text)
     if email_match:
         email = email_match.group(0)
@@ -222,6 +227,7 @@ def telegram_webhook():
     send_telegram_message(chat_id, reply)
     return jsonify({"status": "ok"}), 200
 
+# ========== ΒΟΗΘΗΤΙΚΑ ENDPOINTS ==========
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({"status": "healthy"}), 200
