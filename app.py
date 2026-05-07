@@ -3,6 +3,10 @@ import re
 import requests
 import json
 from flask import Flask, request, jsonify
+import os
+import requests
+import re
+from datetime import datetime   # προστέθηκε
 
 app = Flask(__name__)
 
@@ -35,7 +39,19 @@ def webhook():
     location = get_ip_location(ip)
     opens = data.get('opens_count', 1)
     ip_changed = data.get('ip_changed', False)
+    first_open_time_str = data.get('first_open_time', '')
 
+    # Υπολογισμός ωρών από το πρώτο άνοιγμα
+    hours_since_first_open = 0
+    if first_open_time_str:
+        try:
+            first_open = datetime.strptime(first_open_time_str, '%Y-%m-%d %H:%M:%S')
+            now = datetime.now()
+            hours_since_first_open = (now - first_open).total_seconds() / 3600.0
+        except:
+            pass
+
+    # Νέο prompt (ίδιο όπως πριν)
     prompt = f"""Είσαι σύμβουλος πωλήσεων διακόσμησης. Ανάλυσε συμπεριφορά πελάτη. Στοιχεία:
 
 - Ανοίγματα email: {opens} φορές
@@ -44,14 +60,14 @@ def webhook():
 - IP: {ip} (περιοχή: {location})
 - Η IP άλλαξε: {"ΝΑΙ (κινητικότητα)" if ip_changed else "ΟΧΙ (σταθερή)"}
 
-Απάντησε ΜΟΝΟ με 4 γραμμές, όπως φαίνονται παρακάτω. Κράτα τη γλώσσα φιλική, επαγγελματική. Μην κόβεις τις γραμμές.
+Απάντησε ΜΟΝΟ με 4 γραμμές, όπως φαίνονται παρακάτω.
 
 1. Πιθανότητα κλεισίματος (1-10): [X/10] - (σύντομη εξήγηση)
 2. Συναισθηματική κατάσταση: (π.χ. "προσεκτικός", "ενθουσιώδης")
 3. Πρόταση επόμενης επαφής: (π.χ. "email", "τηλέφωνο", "αναμονή")
 4. Ιδανική ώρα επικοινωνίας: (π.χ. "απόγευμα 6-8", "πρωί 10-12")
 
-Μην γράψεις τίποτα άλλο, ούτε εισαγωγές."""
+Μην γράψεις τίποτα άλλο."""
 
     headers = {
         "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
@@ -61,7 +77,7 @@ def webhook():
         "model": "deepseek-chat",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.5,
-        "max_tokens": 400   # ΑΥΞΗΜΕΝΟ
+        "max_tokens": 200
     }
     try:
         resp = requests.post(DEEPSEEK_URL, json=payload, headers=headers, timeout=15)
@@ -77,34 +93,32 @@ def webhook():
     except:
         score = 0
 
-    # Κλήση στο WordPress αν score > 6
-    if score > 6 and WP_API_TOKEN:
+    # Αποστολή ανάλυσης στο Telegram (πάντα)
+    telegram_msg = f"🎯 *Ανάλυση Πώλησης*\n\n{advice}"
+    requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                  json={"chat_id": TELEGRAM_CHAT_ID, "text": telegram_msg, "parse_mode": "Markdown"},
+                  timeout=5)
+
+    # === ΑΠΟΦΑΣΗ ΑΠΟΣΤΟΛΗΣ REMINDER (μόνο αν score>6 ΚΑΙ έχουν περάσει 24 ώρες από το πρώτο άνοιγμα) ===
+    if score > 6 and hours_since_first_open >= 24:
         wp_endpoint = "https://10deco.gr/wp-json/deco/v1/send-reminder"
         reminder_data = {
             "email": data.get('email'),
             "name": data.get('name'),
             "package": data.get('package'),
             "size": data.get('size'),
-            "score": score
+            "score": score,
+            "address": data.get('address'),
+            "city": data.get('city'),
+            "zip": data.get('zip')
         }
         try:
-            r = requests.post(wp_endpoint, json=reminder_data,
+            requests.post(wp_endpoint, json=reminder_data,
                          headers={"Content-Type": "application/json", "X-API-Token": WP_API_TOKEN},
-                         timeout=5)
-            if r.status_code == 200:
-                # Ειδοποίηση στο Telegram ότι στάλθηκε email
-                tg_msg = f"📧 *Email υπενθύμισης στάλθηκε* σε {data.get('email')} (βαθμολογία {score}/10)"
-                requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                              json={"chat_id": TELEGRAM_CHAT_ID, "text": tg_msg, "parse_mode": "Markdown"},
-                              timeout=3)
+                         timeout=3)
         except Exception as e:
             print(f"Reminder error: {e}")
-
-    # Αποστολή ανάλυσης στο Telegram
-    telegram_msg = f"🎯 *Ανάλυση Πώλησης*\n\n{advice}"
-    requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                  json={"chat_id": TELEGRAM_CHAT_ID, "text": telegram_msg, "parse_mode": "Markdown"},
-                  timeout=5)
+    # ===================================================
 
     return jsonify({"status": "ok"})
 
