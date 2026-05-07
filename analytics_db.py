@@ -18,9 +18,9 @@ def init_db():
                 name TEXT,
                 package TEXT,
                 size REAL,
-                open_count INTEGER,          -- συνολικά ανοίγματα έως τότε (cumulative)
+                open_count INTEGER,
                 ip_changed INTEGER,
-                timestamp TEXT NOT NULL,     -- ώρα αυτού του ανοίγματος
+                timestamp TEXT NOT NULL,
                 analysis_text TEXT NOT NULL,
                 score INTEGER,
                 reminder_count INTEGER DEFAULT 0,
@@ -29,20 +29,17 @@ def init_db():
         ''')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_email ON email_analytics (email)')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON email_analytics (timestamp)')
-        # Πίνακας για τα reminders που στάλθηκαν (αναφορά ποιο στάδιο)
         conn.execute('''
             CREATE TABLE IF NOT EXISTS reminders_sent (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 email TEXT NOT NULL,
                 stage INTEGER NOT NULL,
-                sent_time TEXT NOT NULL,
-                FOREIGN KEY(email) REFERENCES email_analytics(email)
+                sent_time TEXT NOT NULL
             )
         ''')
         conn.commit()
 
 def save_analysis(email, name, package, size, open_count, ip_changed, analysis_text, score):
-    """Αποθηκεύει κάθε νέο άνοιγμα / ανάλυση"""
     with get_db() as conn:
         conn.execute('''
             INSERT INTO email_analytics 
@@ -52,7 +49,6 @@ def save_analysis(email, name, package, size, open_count, ip_changed, analysis_t
         conn.commit()
 
 def get_latest_analysis(email=None):
-    """Τελευταία ανάλυση για συγκεκριμένο email ή γενικά"""
     with get_db() as conn:
         if email:
             cur = conn.execute('''
@@ -69,7 +65,6 @@ def get_latest_analysis(email=None):
         return dict(row) if row else None
 
 def get_recent_events(limit=10):
-    """Τα τελευταία limit ανοίγματα (για γενικό context)"""
     with get_db() as conn:
         cur = conn.execute('''
             SELECT email, name, package, size, open_count, score, timestamp
@@ -79,9 +74,7 @@ def get_recent_events(limit=10):
         return [dict(row) for row in cur.fetchall()]
 
 def get_client_stats(email):
-    """Στατιστικά για έναν πελάτη: total opens, number of events, first/last open, latest score, etc."""
     with get_db() as conn:
-        # Σύνολο ανοιγμάτων (από την τελευταία εγγραφή)
         cur = conn.execute('''
             SELECT open_count, score, name, package, size, timestamp 
             FROM email_analytics 
@@ -91,10 +84,8 @@ def get_client_stats(email):
         latest = cur.fetchone()
         if not latest:
             return None
-        # Πλήθος συμβάντων (πόσες φορές άνοιξε)
         cur2 = conn.execute('SELECT COUNT(*) as cnt FROM email_analytics WHERE email = ?', (email,))
         cnt = cur2.fetchone()['cnt']
-        # Πρώτο άνοιγμα
         cur3 = conn.execute('SELECT timestamp FROM email_analytics WHERE email = ? ORDER BY timestamp ASC LIMIT 1', (email,))
         first = cur3.fetchone()
         return {
@@ -110,9 +101,7 @@ def get_client_stats(email):
         }
 
 def get_all_clients_stats():
-    """Στατιστικά όλων των πελατών (μία γραμμή ανά email)"""
     with get_db() as conn:
-        # Υποερώτημα: παίρνουμε την τελευταία εγγραφή για κάθε email
         cur = conn.execute('''
             SELECT a1.*
             FROM email_analytics a1
@@ -127,18 +116,14 @@ def get_all_clients_stats():
         return [dict(row) for row in rows]
 
 def cleanup_old_analyses(months=6):
-    """Διαγράφει εγγραφές παλαιότερες από months μήνες"""
     cutoff = (datetime.now() - timedelta(days=months*30)).isoformat()
     with get_db() as conn:
-        # Διαγραφή αναλύσεων
         conn.execute('DELETE FROM email_analytics WHERE timestamp < ?', (cutoff,))
-        # Διαγραφή reminders που αναφέρονται σε διαγραμμένες αναλύσεις (δεν έχουμε FK, αλλά ας κρατήσουμε)
         conn.execute('DELETE FROM reminders_sent WHERE sent_time < ?', (cutoff,))
         conn.commit()
         return conn.total_changes
 
 def save_reminder(email, stage):
-    """Καταγράφει ότι στάλθηκε reminder σε πελάτη"""
     with get_db() as conn:
         conn.execute('''
             INSERT INTO reminders_sent (email, stage, sent_time)
@@ -147,7 +132,6 @@ def save_reminder(email, stage):
         conn.commit()
 
 def get_reminder_count(email):
-    """Πόσα reminders έχουν σταλεί σε αυτόν τον πελάτη"""
     with get_db() as conn:
         cur = conn.execute('SELECT COUNT(*) as cnt FROM reminders_sent WHERE email = ?', (email,))
         return cur.fetchone()['cnt']
