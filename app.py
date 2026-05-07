@@ -8,7 +8,7 @@ app = Flask(__name__)
 
 DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY', '')
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
-TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')  # Το δικό σου chat ID (admin)
+TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
 WP_API_TOKEN = os.environ.get('WP_API_TOKEN', '')
 
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
@@ -25,28 +25,17 @@ def get_ip_location(ip):
     except:
         return "unknown"
 
-def call_deepseek(prompt):
-    """Καλεί το DeepSeek API και επιστρέφει την απάντηση."""
-    headers = {
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "deepseek-chat",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.7,
-        "max_tokens": 500
-    }
+def send_telegram_message(chat_id, text):
+    """Βοηθητική συνάρτηση για αποστολή μηνύματος στο Telegram"""
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
-        resp = requests.post(DEEPSEEK_URL, json=payload, headers=headers, timeout=15)
-        resp.raise_for_status()
-        return resp.json()['choices'][0]['message']['content']
+        requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}, timeout=5)
     except Exception as e:
-        return f"Σφάλμα AI: {str(e)}"
+        print(f"Telegram send error: {e}")
 
+# ========== ΥΠΑΡΧΟΝ WEBHOOK (από το plugin) ==========
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    # Αυτό είναι το υπάρχον webhook για τα δεδομένα από το WordPress plugin
     data = request.get_json()
     if not data:
         return jsonify({"error": "no data"}), 400
@@ -67,7 +56,7 @@ def webhook():
         except:
             pass
 
-    # Νέο prompt με 6 γραμμές (όπως πριν)
+    # Prompt με 6 γραμμές
     prompt = f"""Είσαι σύμβουλος πωλήσεων διακόσμησης και Φημισμένος και Ταλαντούχος Interior Designer. Ανάλυσε συμπεριφορά πελάτη. Στοιχεία:
 
 - Ανοίγματα email: {opens} φορές
@@ -76,18 +65,33 @@ def webhook():
 - IP: {ip} (περιοχή: {location})
 - Η IP άλλαξε: {"ΝΑΙ (κινητικότητα)" if ip_changed else "ΟΧΙ (σταθερή)"}
 
-Απάντησε ΜΟΝΟ με 6 γραμμές, ακριβώς όπως φαίνονται παρακάτω. Κράτα τη γλώσσα φιλική, επαγγελματική, χωρίς υπερβολές.
+Απάντησε ΜΟΝΟ με 6 γραμμές, ακριβώς όπως φαίνονται παρακάτω.
 
 1. Πιθανότητα κλεισίματος (1-10): [X/10] - (μία σύντομη εξήγηση)
 2. Συναισθηματική κατάσταση: (π.χ. "προσεκτικός", "ενθουσιώδης", "αναβλητικός")
-3. Πρόταση επόμενης επαφής: (π.χ. "τηλέφωνο αύριο 10-12", "email με έκπτωση", "περιμένετε 2 ημέρες")
+3. Πρόταση επόμενης επαφής: (π.χ. "τηλέφωνο αύριο 10-12", "email με έκπτωση")
 4. Ιδανικό μήνυμα που θα του στείλεις (αυτούσιο, σε ευθεία ομιλία, μέχρι 15 λέξεις)
-5. Εκτίμηση budget/οικονομικής άνεσης: (π.χ. "Υψηλή (Luxury)", "Μεσαία (Basic)", "Χαμηλή")
-6. Συγκεκριμένη ενέργεια για μένα ΤΩΡΑ: (π.χ. "πάρε τον τηλέφωνο αμέσως", "στείλε email με link για ραντεβού")
+5. Εκτίμηση budget/οικονομικής άνεσης: (π.χ. "Υψηλή (Luxury)", "Μεσαία (Basic)")
+6. Συγκεκριμένη ενέργεια για μένα ΤΩΡΑ: (π.χ. "πάρε τον τηλέφωνο αμέσως")
 
-Μην γράψεις τίποτα άλλο, ούτε εισαγωγές."""
+Μην γράψεις τίποτα άλλο."""
 
-    advice = call_deepseek(prompt)
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.5,
+        "max_tokens": 350
+    }
+    try:
+        resp = requests.post(DEEPSEEK_URL, json=payload, headers=headers, timeout=15)
+        resp.raise_for_status()
+        advice = resp.json()['choices'][0]['message']['content']
+    except Exception as e:
+        advice = f"AI error: {str(e)}"
 
     # Εξαγωγή βαθμολογίας
     try:
@@ -96,12 +100,11 @@ def webhook():
     except:
         score = 0
 
-    telegram_msg = f"🎯 *Ανάλυση Πώλησης*\n\n{advice}"
-    requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                  json={"chat_id": TELEGRAM_CHAT_ID, "text": telegram_msg, "parse_mode": "Markdown"},
-                  timeout=5)
+    # Αποστολή ανάλυσης στο Telegram
+    telegram_msg = f"🎯 *Ανάλυση Πιθανής Πώλησης*\n\n{advice}"
+    send_telegram_message(TELEGRAM_CHAT_ID, telegram_msg)
 
-    # Reminder απόφαση
+    # Reminder αν score>6 και 24 ώρες
     if score > 6 and hours_since_first_open >= 24:
         wp_endpoint = "https://10deco.gr/wp-json/deco/v1/send-reminder"
         reminder_data = {
@@ -123,37 +126,45 @@ def webhook():
 
     return jsonify({"status": "ok"})
 
-# ========== ΝΕΟ ENDPOINT ΓΙΑ TELEGRAM CHAT ==========
-@app.route('/telegram-webhook', methods=['POST'])
+# ========== ΝΕΟ WEBHOOK ΓΙΑ ΣΥΝΟΜΙΛΙΑ ΜΕ ΤΟ BOT ==========
+@app.route('/webhook_telegram', methods=['POST'])
 def telegram_webhook():
-    """Δέχεται μηνύματα από το Telegram και απαντάει μέσω DeepSeek."""
+    """Δέχεται μηνύματα από το Telegram και απαντάει μέσω DeepSeek"""
     update = request.get_json()
     if not update or 'message' not in update:
         return jsonify({"status": "ok"}), 200
 
     message = update['message']
-    chat_id = str(message['chat']['id'])
+    chat_id = message['chat']['id']
     text = message.get('text', '')
 
-    # Αν το μήνυμα δεν έχει κείμενο, αγνοούμε
     if not text:
         return jsonify({"status": "ok"}), 200
 
-    # Ασφάλεια: απαντάμε μόνο στο προκαθορισμένο chat ID (admin)
-    allowed_chat_id = os.environ.get('TELEGRAM_CHAT_ID', '')
-    if allowed_chat_id and str(chat_id) != str(allowed_chat_id):
-        # Μην απαντάς σε άγνωστα chat
-        return jsonify({"status": "ok"}), 200
+    # Αποφυγή απάντησης σε μηνύματα που προέρχονται από τον ίδιο τον bot (θα είχε loop)
+    # (δεν χρειάζεται περαιτέρω έλεγχος)
 
-    # Καλούμε το DeepSeek με το κείμενο του χρήστη
-    answer = call_deepseek(text)
-
-    # Στέλνουμε την απάντηση πίσω στο ίδιο chat
-    send_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    # Καλούμε DeepSeek για απάντηση
+    prompt = f"Απάντησε στο εξής μήνυμα ως φιλικός σύμβουλος διακόσμησης. Να είσαι συνοπτικός.\n\nΜήνυμα: {text}"
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.7,
+        "max_tokens": 300
+    }
     try:
-        requests.post(send_url, json={"chat_id": chat_id, "text": answer, "parse_mode": "Markdown"}, timeout=5)
+        resp = requests.post(DEEPSEEK_URL, json=payload, headers=headers, timeout=15)
+        resp.raise_for_status()
+        reply = resp.json()['choices'][0]['message']['content']
     except Exception as e:
-        print(f"Telegram send error: {e}")
+        reply = f"Σφάλμα: {str(e)}"
+
+    # Στέλνουμε την απάντηση πίσω στο Telegram
+    send_telegram_message(chat_id, reply)
 
     return jsonify({"status": "ok"}), 200
 
